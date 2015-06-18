@@ -1,13 +1,13 @@
 // ==UserScript==
 // @name [SteamDB] Monster Minigame Script
-// @namespace https://github.com/SteamDatabase/steamSummerMinigame
+// @namespace https://github.com/thedarknite/steamSummerMinigame
 // @description A script that runs the Steam Monster Minigame for you.
-// @version 4.7.1
+// @version 5.0.5
 // @match *://steamcommunity.com/minigame/towerattack*
 // @match *://steamcommunity.com//minigame/towerattack*
 // @grant none
-// @updateURL https://raw.githubusercontent.com/SteamDatabase/steamSummerMinigame/master/autoPlay.user.js
-// @downloadURL https://raw.githubusercontent.com/SteamDatabase/steamSummerMinigame/master/autoPlay.user.js
+// @updateURL https://raw.githubusercontent.com/thedarknite/steamSummerMinigame/master/autoPlay.user.js
+// @downloadURL https://raw.githubusercontent.com/thedarknite/steamSummerMinigame/master/autoPlay.user.js
 // ==/UserScript==
 
 // IMPORTANT: Update the @version property above to a higher number such as 1.1 and 1.2 when you update the script! Otherwise, Tamper / Greasemonkey users will not update automatically.
@@ -16,18 +16,20 @@
 	"use strict";
 
 // OPTIONS
-var clickRate = 19;
+var clickRate = 20;
 var logLevel = 1; // 5 is the most verbose, 0 disables all log
 
-var nukeBeforeReset = getPreferenceBoolean("nukeBeforeReset", true);
+var isUserScript = (typeof GM_info !== "undefined");
 
 var enableAutoClicker = getPreferenceBoolean("enableAutoClicker", true);
+var enableOffensiveAbilities = getPreferenceBoolean("enableOffensiveAbilities", true);
 
 var enableAutoUpgradeHP = getPreferenceBoolean("enableAutoUpgradeHP", true);
 var enableAutoUpgradeClick = getPreferenceBoolean("enableAutoUpgradeClick", false);
 var enableAutoUpgradeDPS = getPreferenceBoolean("enableAutoUpgradeDPS", false);
 var enableAutoUpgradeElemental = getPreferenceBoolean("enableAutoUpgradeElemental", false);
 var enableAutoPurchase = getPreferenceBoolean("enableAutoPurchase", false);
+var enableAutoBadgePurchase = getPreferenceBoolean("enableAutoBadgePurchase", false);
 
 var removeInterface = getPreferenceBoolean("removeInterface", true); // get rid of a bunch of pointless DOM
 var removeParticles = getPreferenceBoolean("removeParticles", true);
@@ -39,7 +41,7 @@ var disableRenderer = getPreferenceBoolean("disableRenderer", true);
 
 var enableElementLock = getPreferenceBoolean("enableElementLock", true);
 
-var enableAutoRefresh = getPreferenceBoolean("enableAutoRefresh", typeof GM_info !== "undefined");
+var enableAutoRefresh = getPreferenceBoolean("enableAutoRefresh", isUserScript);
 
 var autoRefreshMinutes = 30;
 var autoRefreshMinutesRandomDelay = 10;
@@ -49,7 +51,7 @@ var autoRefreshSecondsCheckLoadedDelay = 30;
 var isPastFirstRun = false;
 var isAlreadyRunning = false;
 var refreshTimer = null;
-var currentClickRate = clickRate;
+var currentClickRate = enableAutoClicker ? clickRate : 0;
 var lastLevel = 0;
 var trt_oldCrit = function() {};
 var trt_oldPush = function() {};
@@ -144,13 +146,10 @@ var BOSS_DISABLED_ABILITIES = [
 ];
 
 var CONTROL = {
-	speedThreshold: 5000,
-	rainingRounds: 250,
+	speedThreshold: 200,
+	rainingRounds: 100,
 	disableGoldRainLevels: 500,
-	nukeStartMinutes: 60,
-	wormholeRounds: 100,
-	wormholeEndMinutes: 15,
-	goldholeThreshold: 2000
+	rainingSafeRounds: 10
 };
 
 var GAME_STATUS = {
@@ -264,6 +263,8 @@ function firstRun() {
 		".bc_room {color: #D4E157;}",
 		".bc_level {color: #FFA07A;}",
 		".bc_time {color: #9AC0FF;}",
+		// Always show ability count
+		".abilitytemplate > a > .abilityitemquantity {visibility: visible; pointer-events: none;}",
 		""
 	];
 	styleNode.textContent = styleText.join("");
@@ -298,17 +299,19 @@ function firstRun() {
 	var sfx_btn = document.querySelector(".toggle_sfx_btn");
 	options_menu.insertBefore(info_box, sfx_btn);
 
-	info_box.innerHTML = '<b>OPTIONS</b>' + ((typeof GM_info !== "undefined") ? ' (v' + GM_info.script.version + ')' : '') + '<br>Settings marked with a <span class="asterisk">*</span> requires a refresh to take effect.<hr>';
+	info_box.innerHTML = '<b>OPTIONS</b>' + (isUserScript ? ' (v' + GM_info.script.version + ')' : '') + '<br>Settings marked with a <span class="asterisk">*</span> requires a refresh to take effect.<hr>';
 
 	var options1 = document.createElement("div");
 	options1.className = "options_column";
 
 	options1.appendChild(makeCheckBox("enableAutoClicker", "Enable AutoClicker", enableAutoClicker, toggleAutoClicker, false));
+	options1.appendChild(makeCheckBox("enableOffensiveAbilities", "Enable Offensive ability use", enableOffensiveAbilities, toggleOffensiveAbilities, false));
 	options1.appendChild(makeCheckBox("enableAutoUpgradeHP", "Enable AutoUpgrade HP", enableAutoUpgradeHP, toggleAutoUpgradeHP, false));
 	options1.appendChild(makeCheckBox("enableAutoUpgradeClick", "Enable AutoUpgrade Clicks", enableAutoUpgradeClick, toggleAutoUpgradeClick, false));
 	options1.appendChild(makeCheckBox("enableAutoUpgradeDPS", "Enable AutoUpgrade DPS", enableAutoUpgradeDPS, toggleAutoUpgradeDPS, false));
 	options1.appendChild(makeCheckBox("enableAutoUpgradeElemental", "Enable AutoUpgrade locked elemental", enableAutoUpgradeElemental, toggleAutoUpgradeElemental, false));
 	options1.appendChild(makeCheckBox("enableAutoPurchase", "Enable AutoPurchase Abilities", enableAutoPurchase, toggleAutoPurchase, false));
+	options1.appendChild(makeCheckBox("enableAutoBadgePurchase", "Enable AutoPurchase badges (WH strat)", enableAutoBadgePurchase, toggleAutoBadgePurchase, false));
 	options1.appendChild(makeCheckBox("removeInterface", "Remove interface", removeInterface, handleEvent, true));
 	options1.appendChild(makeCheckBox("removeParticles", "Remove particle effects", removeParticles, handleEvent, true));
 	options1.appendChild(makeCheckBox("removeFlinching", "Remove flinching effects", removeFlinching, handleEvent, true));
@@ -321,12 +324,11 @@ function firstRun() {
 	var options2 = document.createElement("div");
 	options2.className = "options_column";
 
-	if (typeof GM_info !== "undefined") {
+	if (isUserScript) {
 		options2.appendChild(makeCheckBox("enableAutoRefresh", "Enable AutoRefresh (mitigate memory leak)", enableAutoRefresh, toggleAutoRefresh, false));
 	}
 
 	options2.appendChild(makeCheckBox("enableFingering", "Enable targeting pointer", enableFingering, toggleFingering, false));
-	options2.appendChild(makeCheckBox("nukeBeforeReset", "Spam abilities 1 hour before game end", nukeBeforeReset, handleEvent, true));
 	options2.appendChild(makeNumber("setLogLevel", "Change the log level (you shouldn't need to touch this)", logLevel, 0, 5, updateLogLevel));
 
 	info_box.appendChild(options2);
@@ -412,7 +414,6 @@ function MainLoop() {
 
 	var level = s().m_rgGameData.level + 1;
 
-
 	if (!isAlreadyRunning) {
 		isAlreadyRunning = true;
 
@@ -422,27 +423,44 @@ function MainLoop() {
 
 		var timeLeft = getTimeleft(); // Time left in minutes
 
-		if(timeLeft <= 15) {
+		if(timeLeft <= 5) {
 			useAllAbilities();
 		} else {
-			useAbilities(level, timeLeft);
+			useAbilities(level);
 		}
 
 		updatePlayersInGame();
 
-		if( level !== lastLevel ) {
+		if(level !== lastLevel) {
+			if(lastLevel > 0) {
+				updateLevelInfoTitle(level, lastLevel);
+
+				refreshPlayerData();
+			}
+
+			s().m_rgAbilityQueue = [];
 			lastLevel = level;
-			updateLevelInfoTitle(level);
-			refreshPlayerData();
 		}
 
-		useAutoUpgrade();
-		useAutoPurchaseAbilities();
+		// only AutoUpgrade after we've spend all badge points
+		if(s().m_rgPlayerTechTree) {
+			if(s().m_rgPlayerTechTree.badge_points === 0) {
+				useAutoUpgrade();
+				useAutoPurchaseAbilities();
+			}
+			else {
+				useAutoBadgePurchase();
+			}
+		}
 
-		if(level > CONTROL.goldholeThreshold && level % 500 === 0) {
-			advLog('Skipping autoclick on wormhole boss farm.');
-		} else {
-			s().m_nClicks += currentClickRate;
+		var absoluteCurrentClickRate = 0;
+
+		if(currentClickRate > 0) {
+			var levelRainingMod = level % CONTROL.rainingRounds;
+
+			absoluteCurrentClickRate = level >= CONTROL.speedThreshold && (levelRainingMod === 0 || 3 >= (CONTROL.rainingRounds - levelRainingMod)) ? 0 : currentClickRate;
+
+			s().m_nClicks += absoluteCurrentClickRate;
 		}
 
 		s().m_nLastTick = false;
@@ -453,7 +471,7 @@ function MainLoop() {
 			s().m_rgGameData.lanes[s().m_rgPlayerData.current_lane].element
 		);
 
-		advLog("Ticked. Current clicks per second: " + currentClickRate + ". Current damage per second: " + (damagePerClick * currentClickRate), 4);
+		advLog("Ticked. Current clicks per second: " + absoluteCurrentClickRate + ". Current damage per second: " + (damagePerClick * absoluteCurrentClickRate), 4);
 
 		if(disableRenderer) {
 			s().Tick();
@@ -465,7 +483,7 @@ function MainLoop() {
 
 		isAlreadyRunning = false;
 
-		if( currentClickRate > 0 ) {
+		if( absoluteCurrentClickRate > 0) {
 			var enemy = s().GetEnemy(
 				s().m_rgPlayerData.current_lane,
 				s().m_rgPlayerData.target);
@@ -474,7 +492,7 @@ function MainLoop() {
 				displayText(
 					enemy.m_Sprite.position.x - (enemy.m_nLane * 440),
 					enemy.m_Sprite.position.y - 52,
-					"-" + w.FormatNumberForDisplay((damagePerClick * currentClickRate), 5),
+					"-" + w.FormatNumberForDisplay((damagePerClick * absoluteCurrentClickRate), 5),
 					"#aaf"
 				);
 
@@ -489,7 +507,7 @@ function MainLoop() {
 
 				var goldPerClickPercentage = s().m_rgGameData.lanes[s().m_rgPlayerData.current_lane].active_player_ability_gold_per_click;
 				if (goldPerClickPercentage > 0 && enemy.m_data.hp > 0) {
-					var goldPerSecond = enemy.m_data.gold * goldPerClickPercentage * currentClickRate;
+					var goldPerSecond = enemy.m_data.gold * goldPerClickPercentage * absoluteCurrentClickRate;
 
 					s().ClientOverride('player_data', 'gold', s().m_rgPlayerData.gold + goldPerSecond);
 					s().ApplyClientOverrides('player_data', true);
@@ -509,6 +527,52 @@ function MainLoop() {
 			}
 		}
 	}
+}
+
+function useAutoBadgePurchase() {
+	if(!enableAutoBadgePurchase) { return; }
+
+	// id = ability
+	// ratio = how much of the remaining badges to spend
+	var abilityPriorityList = [
+		{ id: ABILITIES.WORMHOLE,   ratio: 0.9 },
+		{ id: ABILITIES.LIKE_NEW,   ratio: 1 },
+		{ id: ABILITIES.CRIT,       ratio: 1 },
+		{ id: ABILITIES.TREASURE,   ratio: 1 },
+		{ id: ABILITIES.PUMPED_UP,  ratio: 1 },
+	];
+
+	var badgePoints = s().m_rgPlayerTechTree.badge_points;
+	var abilityData = s().m_rgTuningData.abilities;
+	var abilityPurchaseQueue = [];
+
+	for (var i = 0; i < abilityPriorityList.length; i++) {
+		var id = abilityPriorityList[i].id;
+		var ratio = abilityPriorityList[i].ratio;
+		var cost = abilityData[id].badge_points_cost;
+		var portion = parseInt(badgePoints * ratio);
+		badgePoints -= portion;
+
+		while(portion >= cost) {
+			abilityPurchaseQueue.push(id);
+			portion -= cost;
+		}
+
+		badgePoints += portion;
+	}
+
+	s().m_rgPurchaseItemsQueue = abilityPurchaseQueue;
+	s().m_UI.UpdateSpendBadgePointsDialog();
+}
+
+function toggleAutoBadgePurchase(event) {
+	var value = enableAutoBadgePurchase;
+
+	if(event !== undefined) {
+		value = handleCheckBox(event);
+	}
+
+	enableAutoBadgePurchase = value;
 }
 
 function useAllAbilities() {
@@ -539,6 +603,7 @@ function useAutoPurchaseAbilities() {
 }
 
 var autoupgrade_update_hilight = true;
+var autoupgrade_hp_threshold = 0;
 
 function useAutoUpgrade() {
 	if(!enableAutoUpgradeDPS
@@ -550,6 +615,13 @@ function useAutoUpgrade() {
 		return;
 	}
 
+	// fixes hiligh when we tick before elements are created
+	if(!document.querySelector('.container_upgrades')
+		|| !document.querySelector('.container_upgrades').hasChildNodes()
+		) {
+		return;
+	}
+
 	var upg_order = [
 		UPGRADES.ARMOR_PIERCING_ROUND,
 		UPGRADES.LIGHT_ARMOR,
@@ -558,15 +630,23 @@ function useAutoUpgrade() {
 	];
 	if(enableAutoUpgradeElemental && ELEMENTS.LockedElement !== -1) { upg_order.push(ELEMENTS.LockedElement+3); }
 	var upg_map = {};
-
 	upg_order.forEach(function(i) { upg_map[i] = {}; });
-	var gData = s().m_rgGameData;
 	var pData = s().m_rgPlayerData;
 	var pTree = s().m_rgPlayerTechTree;
 	var cache = s().m_UI.m_rgElementCache;
+
+	// calculate hp threshold based on mob dps
+	var mob = s().m_rgEnemies[0];
+	if(!!mob) {
+		var threshold = mob.m_data.dps * 300 * 2.5;
+		if(threshold > autoupgrade_hp_threshold) {
+			autoupgrade_hp_threshold = threshold;
+		}
+	}
+
 	var upg_enabled = [
 		enableAutoUpgradeClick,
-		enableAutoUpgradeHP && pTree.max_hp < Math.max(300000, gData.level * 30),
+		enableAutoUpgradeHP && pTree.max_hp < Math.max(100000, autoupgrade_hp_threshold),
 		enableAutoUpgradeDPS,
 	];
 
@@ -619,13 +699,16 @@ function useAutoUpgrade() {
 		var tree = upg_map[upg_order[i]];
 
 		// upgrade crit/elemental when necessary
-		if(upg_order[i] === UPGRADES.ARMOR_PIERCING_ROUND) {
-			if(upg_map[UPGRADES.LUCKY_SHOT].cost_per_mult < upg_map[UPGRADES.ARMOR_PIERCING_ROUND].cost_per_mult) {
+		if(
+			(enableAutoUpgradeClick && upg_order[i] === UPGRADES.ARMOR_PIERCING_ROUND)
+			|| (!enableAutoUpgradeClick && enableAutoUpgradeDPS && upg_order[i] === UPGRADES.AUTO_FIRE_CANNON)
+		) {
+			if(enableAutoUpgradeClick && upg_map[UPGRADES.LUCKY_SHOT].cost_per_mult < upg_map[upg_order[i]].cost_per_mult) {
 				tree = upg_map[UPGRADES.LUCKY_SHOT];
 			}
 			else if(enableAutoUpgradeElemental
 					&& upg_map.hasOwnProperty(ELEMENTS.LockedElement+3)
-					&& upg_map[ELEMENTS.LockedElement+3].cost_per_mult < upg_map[UPGRADES.ARMOR_PIERCING_ROUND].cost_per_mult) {
+					&& upg_map[ELEMENTS.LockedElement+3].cost_per_mult < upg_map[upg_order[i]].cost_per_mult) {
 				tree = upg_map[ELEMENTS.LockedElement+3];
 			}
 		}
@@ -692,6 +775,17 @@ function toggleAutoPurchase(event) {
 	}
 
 	enableAutoPurchase = value;
+}
+
+function toggleOffensiveAbilities(event) {
+
+	var value = enableOffensiveAbilities;
+
+	if(event !== undefined) {
+		value = handleCheckBox(event);
+	}
+
+	enableOffensiveAbilities = value;
 }
 
 function refreshPlayerData() {
@@ -1198,27 +1292,22 @@ function goToLaneWithBestTarget(level) {
 			advLog('Switching targets', 3);
 			s().TryChangeTarget(lowTarget);
 		}
+	}
 
-		// Prevent attack abilities and items if up against a boss or treasure minion
-		if (targetIsTreasure || (targetIsBoss && (level < CONTROL.speedThreshold || level % CONTROL.rainingRounds === 0))) {
-			BOSS_DISABLED_ABILITIES.forEach(disableAbility);
-		} else {
-			BOSS_DISABLED_ABILITIES.forEach(enableAbility);
-		}
+	var levelRainingMod = level % CONTROL.rainingRounds;
 
-		// Always disable wormhole on lower levels
-		if(level < CONTROL.speedThreshold) {
-			disableAbility(ABILITIES.WORMHOLE);
-		} else {
-			enableAbility(ABILITIES.WORMHOLE);
-		}
+	// Prevent attack abilities and items if up against a boss or treasure minion
+	if (targetIsTreasure || (level < CONTROL.speedThreshold || levelRainingMod === 0 || CONTROL.rainingSafeRounds >= (CONTROL.rainingRounds - levelRainingMod))) {
+		BOSS_DISABLED_ABILITIES.forEach(disableAbility);
+	} else {
+		BOSS_DISABLED_ABILITIES.forEach(enableAbility);
+	}
 
-		// Disable raining gold for the first levels
-		if(level < CONTROL.rainingRounds) {
-			disableAbility(ABILITIES.RAINING_GOLD);
-		} else {
-			enableAbility(ABILITIES.RAINING_GOLD);
-		}
+	// Disable raining gold for the first levels
+	if(level < CONTROL.rainingRounds) {
+		disableAbility(ABILITIES.RAINING_GOLD);
+	} else {
+		enableAbility(ABILITIES.RAINING_GOLD);
 	}
 }
 
@@ -1235,31 +1324,7 @@ function hasMaxCriticalOnLane() {
 	}
 }
 
-function isRainingRound(level)
-{
-	var mod = level % CONTROL.rainingRounds;
-
-	if (mod === 0) {
-		return true;
-	}
-	else {
-		return false;
-	}
-}
-
-function isWormholeRound(level)
-{
-	var mod = level % CONTROL.wormholeRounds;
-
-	if (mod === 0) {
-		return true;
-	}
-	else {
-		return false;
-	}
-}
-
-function useAbilities(level, timeLeft)
+function useAbilities(level)
 {
 
 	var currentLane = s().m_nExpectedLane;
@@ -1270,20 +1335,6 @@ function useAbilities(level, timeLeft)
 	var enemySpawnerHealthPercent = false;
 	var enemy = false;
 	var enemyBossHealthPercent = 0;
-
-	// Cripple Monster
-	if(canUseAbility(ABILITIES.CRIPPLE_MONSTER)) {
-		if (level > CONTROL.speedThreshold && level % CONTROL.rainingRounds !== 0 && level % 10 === 0) {
-			enemy = s().GetEnemy(s().m_rgPlayerData.current_lane, s().m_rgPlayerData.target);
-			if (enemy && enemy.m_data.type == ENEMY_TYPE.BOSS) {
-				enemyBossHealthPercent = enemy.m_flDisplayedHP / enemy.m_data.max_hp;
-				if (enemyBossHealthPercent>0.5){
-					advLog("Cripple Monster available and used on boss", 2);
-					triggerAbility(ABILITIES.CRIPPLE_MONSTER);
-				}
-			}
-		}
-	}
 
 	// Medic & Pumped Up
 	if (tryUsingAbility(ABILITIES.PUMPED_UP)){
@@ -1309,27 +1360,54 @@ function useAbilities(level, timeLeft)
 
 	}
 
+	var levelRainingMod = level % CONTROL.rainingRounds;
+
 	// Wormhole
-	if (nukeBeforeReset && timeLeft <= CONTROL.nukeStartMinutes) {
-		tryUsingAbility(ABILITIES.DECREASE_COOLDOWNS, true);
+	if(level >= CONTROL.speedThreshold && levelRainingMod === 0) {
+		enableAbility(ABILITIES.WORMHOLE);
+		enableAbility(ABILITIES.LIKE_NEW);
 
-		// Check if Wormhole is purchased
-		if (timeLeft >= CONTROL.wormholeEndMinutes && isWormholeRound(level) && tryUsingAbility(ABILITIES.WORMHOLE)) {
-			advLog('Less than 60 minutes for game to end. Triggering wormholes...', 2);
-		}
-		else if (tryUsingAbility(ABILITIES.THROW_MONEY_AT_SCREEN)) {
-			advLog('Less than 60 minutes for game to end. Throwing money at screen for no particular reason...', 2);
-		}
-	}
-	else if(level > CONTROL.goldholeThreshold && level % 500 === 0) {
-		advLog('Trying to trigger cooldown and wormhole...', 2);
+		advLog('Trying to trigger cooldown and wormhole...', 1);
 
 		tryUsingAbility(ABILITIES.DECREASE_COOLDOWNS, true);
-		tryUsingAbility(ABILITIES.WORMHOLE);
-		tryUsingAbility(ABILITIES.RAINING_GOLD);
+		tryUsingAbility(ABILITIES.WORMHOLE, false, true);
+
+		// Chance of using at least one like new with X active script users
+		// 10% chance to use
+		// -------
+		// 20  users = 87.84%
+		// 50  users = 99.48%
+		// 100 users = 99.99%
+		if(Math.random() <= 0.1) {
+			tryUsingAbility(ABILITIES.LIKE_NEW, true);
+		}
 
 		// Exit right now so we don't use any other abilities after wormhole
 		return;
+	} else {
+		disableAbility(ABILITIES.WORMHOLE);
+		disableAbility(ABILITIES.LIKE_NEW);
+	}
+
+	// Skip doing any damage x levels before upcoming wormhole round
+	if(!enableOffensiveAbilities || CONTROL.rainingSafeRounds >= (CONTROL.rainingRounds - levelRainingMod)) {
+		tryUsingAbility(ABILITIES.RESURRECTION, true);
+
+		return;
+	}
+
+	// Cripple Monster
+	if(canUseAbility(ABILITIES.CRIPPLE_MONSTER)) {
+		if (level >= CONTROL.speedThreshold && level % CONTROL.rainingRounds !== 0 && level % 10 === 0) {
+			enemy = s().GetEnemy(s().m_rgPlayerData.current_lane, s().m_rgPlayerData.target);
+			if (enemy && enemy.m_data.type == ENEMY_TYPE.BOSS) {
+				enemyBossHealthPercent = enemy.m_flDisplayedHP / enemy.m_data.max_hp;
+				if (enemyBossHealthPercent>0.5){
+					advLog("Cripple Monster available and used on boss", 2);
+					triggerAbility(ABILITIES.CRIPPLE_MONSTER);
+				}
+			}
+		}
 	}
 
 	// Good Luck Charms / Crit
@@ -1412,8 +1490,7 @@ function useAbilities(level, timeLeft)
 	}
 
 	// Tactical Nuke
-	if(!isRainingRound(level) && canUseAbility(ABILITIES.TACTICAL_NUKE)) {
-
+	if(canUseAbility(ABILITIES.TACTICAL_NUKE)) {
 		enemy = s().GetEnemy(s().m_rgPlayerData.current_lane, s().m_rgPlayerData.target);
 		// check whether current target is a boss
 		if (enemy && enemy.m_data.type == ENEMY_TYPE.BOSS) {
@@ -1564,16 +1641,16 @@ function bHaveItem(itemId) {
 	return false;
 }
 
-function canUseAbility(abilityId) {
+function canUseAbility(abilityId, skipCooldownCheck) {
 	if(!s().bHaveAbility(abilityId) && !bHaveItem(abilityId)) {
 		return false;
 	}
 
-	return s().GetCooldownForAbility(abilityId) <= 0 && isAbilityEnabled(abilityId);
+	return (skipCooldownCheck || s().GetCooldownForAbility(abilityId) <= 0) && isAbilityEnabled(abilityId);
 }
 
-function tryUsingAbility(itemId, checkInLane) {
-	if (!canUseAbility(itemId)) {
+function tryUsingAbility(itemId, checkInLane, skipCooldownCheck) {
+	if (!canUseAbility(itemId, skipCooldownCheck)) {
 		return false;
 	}
 
@@ -1851,12 +1928,17 @@ function appendBreadcrumbsTitleInfo() {
 	ELEMENTS.RemainingTime = element;
 }
 
-function updateLevelInfoTitle(level)
+function updateLevelInfoTitle(level, lastLevel)
 {
 	var exp_lvl = expectedLevel(level);
 	var rem_time = countdown(exp_lvl.remaining_time);
 
-	ELEMENTS.ExpectedLevel.textContent = 'Level: ' + level + ', Expected Level: ' + exp_lvl.expected_level + ', Likely Level: ' + exp_lvl.likely_level;
+	ELEMENTS.ExpectedLevel.textContent =
+		'Level: ' + w.FormatNumberForDisplay(level) +
+		', Expected Level: ' + w.FormatNumberForDisplay(exp_lvl.expected_level) +
+		', Likely Level: ' + w.FormatNumberForDisplay(exp_lvl.likely_level) +
+		', Last jump: ' + w.FormatNumberForDisplay(level - lastLevel);
+
 	ELEMENTS.RemainingTime.textContent = 'Remaining Time: ' + rem_time.hours + ' hours, ' + rem_time.minutes + ' minutes.';
 }
 
